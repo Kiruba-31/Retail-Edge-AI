@@ -1,0 +1,11 @@
+{
+  "title": "Retail Shop",
+  "description": "Provides retail stores with real-time shopper analytics, inventory monitoring, and queue management to optimize operations and enhance customer experience.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
