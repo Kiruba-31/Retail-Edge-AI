@@ -657,8 +657,28 @@ Optional arguments include:
 - `--move-threshold` for motion tolerance
 - `--spacing` for queue spacing in meters per person
 - `--exit-window` for Little’s Law estimation window
+- `--mongo-uri` to enable asynchronous MongoDB video metadata recording
+- `--mongo-db` for the MongoDB database name (default: `retailedge`)
+- `--camera-id` for the camera identifier stored with each recording
+- `--metadata-output-dir` for the local video files linked from MongoDB
 
 This command processes the video, writes the queue metrics to CSV, and optionally saves an annotated video with bounding boxes and lane overlays.
+
+### Recording video metadata to MongoDB
+
+Install and start MongoDB, then pass its connection URI. The recorder writes
+the video sequentially to `recordings/` and inserts detection metadata in the
+background in batches, so MongoDB writes do not block inference:
+
+```bash
+python queue_congestion_prediction.py --video path/to/video.mp4 --lanes lanes_config.json --model yolov8n.pt --mongo-uri mongodb://localhost:27017 --camera-id entrance_cam_01
+```
+
+The `video_sessions` collection stores one recording document. The
+`frame_events` collection stores one document per tracked person with
+`video_id`, `frame_number`, `timestamp_ms`, `track_id`, `class`, `bbox`, and
+`confidence`. Use `video_id` and `frame_number` to map an event to the saved
+video. Omit `--mongo-uri` to run without MongoDB.
 
 ---
 

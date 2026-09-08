@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+from video_metadata_recorder import VideoMetadataRecorder
 
 # ----------------------------------------------------------------------------
 # Constants for the people-queue version
@@ -344,7 +345,8 @@ class QueueCongestionPredictor:
     # -- main loop -----------------------------------------------------------
 
     def process_video(self, video_path: str, output_csv: str,
-                       output_video: Optional[str] = None):
+                       output_video: Optional[str] = None,
+                       metadata_recorder: Optional[VideoMetadataRecorder] = None):
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise IOError(f"Could not open video: {video_path}")
@@ -381,6 +383,20 @@ class QueueCongestionPredictor:
                 detections = self._detect(frame)
                 tracks = self._update_tracks(detections, frame)
                 self._update_lane_exit_events(tracks)
+
+                if metadata_recorder:
+                    metadata_recorder.log_frame(
+                        frame,
+                        [
+                            {
+                                "track_id": track["id"],
+                                "class": "person",
+                                "bbox": [float(value) for value in track["bbox"]],
+                                "conf": track["confidence"],
+                            }
+                            for track in tracks
+                        ],
+                    )
 
                 lane_results = {}
                 for lane in self.lanes:
@@ -439,6 +455,8 @@ class QueueCongestionPredictor:
             cap.release()
             if writer:
                 writer.release()
+            if metadata_recorder:
+                metadata_recorder.close()
             csv_file.close()
 
         elapsed = time.time() - t0
@@ -468,6 +486,12 @@ def main():
                         help="Trailing window in seconds for Little's Law throughput estimate")
     parser.add_argument("--output", default="queue_log.csv", help="Output CSV log path")
     parser.add_argument("--save-video", default=None, help="Optional path to save annotated video")
+    parser.add_argument("--mongo-uri", default=None,
+                        help="MongoDB URI; enables video metadata recording when provided")
+    parser.add_argument("--mongo-db", default="retailedge", help="MongoDB database name")
+    parser.add_argument("--camera-id", default="queue-camera", help="Camera identifier stored in MongoDB")
+    parser.add_argument("--metadata-output-dir", default="recordings",
+                        help="Directory for videos linked to MongoDB metadata")
     args = parser.parse_args()
 
     lanes = load_lanes(args.lanes)
@@ -482,7 +506,28 @@ def main():
         exit_window_seconds=args.exit_window,
         exclusion_zones=exclusion_zones,
     )
-    predictor.process_video(args.video, args.output, output_video=args.save_video)
+    metadata_recorder = None
+    if args.mongo_uri:
+        metadata_cap = cv2.VideoCapture(args.video)
+        if not metadata_cap.isOpened():
+            raise IOError(f"Could not open video: {args.video}")
+        metadata_recorder = VideoMetadataRecorder(
+            output_dir=args.metadata_output_dir,
+            camera_id=args.camera_id,
+            mongo_uri=args.mongo_uri,
+            db_name=args.mongo_db,
+            frame_width=int(metadata_cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280,
+            frame_height=int(metadata_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720,
+            fps=metadata_cap.get(cv2.CAP_PROP_FPS) or 25.0,
+        )
+        metadata_cap.release()
+
+    predictor.process_video(
+        args.video,
+        args.output,
+        output_video=args.save_video,
+        metadata_recorder=metadata_recorder,
+    )
 
 
 if __name__ == "__main__":
