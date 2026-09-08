@@ -13,6 +13,10 @@ __pycache__/
 *.onnx
 *.weights
 
+# Checked-in queue data samples
+!queue_log*.csv
+!whatsapp_frame_5s.jpg
+
 # Common experiment and cache directories
 .cache/
 cache/
