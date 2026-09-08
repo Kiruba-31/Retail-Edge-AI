@@ -7,8 +7,16 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import cv2
-from pymongo import ASCENDING, MongoClient
-from pymongo.errors import PyMongoError
+
+try:
+    from pymongo import ASCENDING, MongoClient
+    from pymongo.errors import PyMongoError
+except ImportError:  # MongoDB is optional unless --mongo-uri is provided.
+    ASCENDING = None
+    MongoClient = None
+
+    class PyMongoError(Exception):
+        pass
 
 
 class VideoMetadataRecorder:
@@ -26,6 +34,11 @@ class VideoMetadataRecorder:
         batch_size: int = 30,
         flush_interval: float = 1.0,
     ):
+        if MongoClient is None:
+            raise RuntimeError(
+                "MongoDB recording requires pymongo. Install dependencies with "
+                "'python -m pip install -r requirements.txt'."
+            )
         if batch_size < 1:
             raise ValueError("batch_size must be at least 1")
         if flush_interval <= 0:
