@@ -1,0 +1,24 @@
+{
+  "_comment": "Each lane's polygon is the PEOPLE QUEUEING AREA ONLY -- from the stop line back to where the lane leaves the camera view. People past the stop line are automatically excluded because they fall outside this polygon. Coordinates are pixel (x, y) in the source video frame and must match the source video's resolution.",
+
+  "lanes": [
+    {
+      "name": "Lane 1",
+      "polygon": [[120, 520], [420, 520], [420, 1045], [120, 1045]],
+      "stop_line": [[120, 520], [420, 520]],
+      "max_queue_length_m": 4
+    },
+    {
+      "name": "Lane 2",
+      "polygon": [[430, 520], [760, 520], [760, 1045], [430, 1045]],
+      "stop_line": [[430, 520], [760, 520]],
+      "max_queue_length_m": 5
+    },
+    {
+      "name": "Lane 3",
+      "polygon": [[770, 520], [1110, 520], [1110, 1045], [770, 1045]],
+      "stop_line": [[770, 520], [1110, 520]],
+      "max_queue_length_m": 5
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "_comment": "Single people queue for the WhatsApp video. Coordinates match the 1024x576 source video.",
+  "lanes": [
+    {
+      "name": "Lane 1",
+      "polygon": [[250, 215], [650, 215], [720, 575], [360, 575], [245, 430]],
+      "max_queue_length_m": 12
+    }
+  ],
+  "exclusion_zones": [
+    {
+      "name": "TV",
+      "polygon": [[700, 0], [1023, 0], [1023, 210], [700, 210]]
+    },
+    {
+      "name": "Glass booth",
+      "polygon": [[0, 120], [295, 120], [295, 455], [0, 455]]
+    }
+  ]
+}

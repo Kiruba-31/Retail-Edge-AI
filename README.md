@@ -1,76 +1,708 @@
-# Retail Edge AI Dashboard
+# Queue Congestion Prediction and Simulation
 
-A comprehensive, role-based frontend dashboard for managing retail operations. This application provides distinct interfaces and capabilities tailored for different organizational roles including Admin, Store Manager, Inventory Staff, and Operations Manager.
+This project estimates queue length, identifies congested conditions, and forecasts short-term queue growth or decline from a video of people waiting in a queue. The system combines computer vision, multi-object tracking, and lightweight queue analytics to convert raw video frames into queue metrics such as queue length in meters, congestion state, and predicted queue change over the next second.
 
-## Features
+The implementation is contained in [queue_congestion_prediction.py](queue_congestion_prediction.py), with lane definitions stored in [lanes_config.json](lanes_config.json). The pipeline is designed for a camera view where people stand in several lanes, each lane has a known queueing region, and the goal is to measure how many people are stopped in the queue and how severe that congestion is.
 
-- **Role-Based Access Control (RBAC):** Tailored dashboard experiences based on user roles.
-- **Secure Authentication:** Integrated with Clerk for robust, seamless sign-in and user management.
-- **Real-Time Updates:** Powered by `socket.io-client` for live data synchronization.
-- **Data Visualization:** Interactive charts and metrics using `recharts`.
-- **Modern UI/UX:** Built with React, styled with Tailwind CSS v4, and utilizing Lucide React icons for a clean, responsive interface.
-- **Fast Development:** Scaffolded with Vite for instantaneous hot module replacement (HMR) and fast builds.
+---
 
-## Tech Stack
+## 1. Project purpose
 
-- **Framework:** React 19 + Vite 8
-- **Styling:** Tailwind CSS v4
-- **Authentication:** Clerk (`@clerk/react`)
-- **Routing:** React Router DOM
-- **Charts:** Recharts
-- **Networking:** Axios, Socket.io-client
+The core question the project tries to answer is:
 
-## Getting Started
+- How many people are waiting in each queue lane?
+- How long is the queue in meters?
+- Is the lane in a low, medium, or high congestion state?
+- Is the queue likely to grow or shrink in the next moment?
+- Roughly how long might a waiting person expect to wait?
 
-### Prerequisites
+This is not a full traffic simulation model in the sense of microscopic vehicle dynamics. Instead, it is a vision-based queue estimation and forecasting pipeline: it detects people, tracks their movement across frames, classifies which ones are effectively stopped, accumulates queue length over time, and then applies a simple statistical forecast to the queue trend.
 
-- Node.js (Version specified in `.mise.toml` or generally Node 18+)
-- `npm` or `pnpm`
+---
 
-### Installation
+## 2. Files in this project
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/Kiruba-31/Retail-Edge-AI.git
-   cd Retail-Edge-AI
-   ```
+### [queue_congestion_prediction.py](queue_congestion_prediction.py)
+This is the main processing script. It does the following:
 
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-   *(or use `pnpm install` / `yarn` based on your preference)*
+1. Loads a YOLO person detector.
+2. Tracks each person across frames with Deep SORT.
+3. Determines whether each tracked person is stationary enough to be considered queued.
+4. Maps each person to a predefined lane polygon.
+5. Converts counts into estimated queue length in meters.
+6. Aggregates queue measurements per second.
+7. Computes congestion level and a short-term prediction.
+8. Writes CSV logs and optionally saves an annotated video.
 
-### Running Locally
+### [lanes_config.json](lanes_config.json)
+This file defines the geometrical queueing zone for each lane. Each lane is described as a polygon in image coordinates. The polygon is not the entire image; it is only the queueing area behind the stop line. This is crucial because the code intentionally excludes any vehicles/people who have crossed the stop line and are no longer part of the queue.
 
-Start the development server:
+The polygons are configured as:
+
+- lane name
+- polygon boundary points
+- optional stop line
+- maximum queue length used in normalization
+
+No vehicle classes or vehicle-capacity values are used. Every polygon must be
+drawn around a people-waiting area and must match the pixel dimensions of the
+input video.
+
+The same schema supports optional `exclusion_zones`. Each exclusion zone has a
+name and polygon; person detections whose centroids fall inside one are removed
+before tracking. The predictor also removes duplicate confirmed tracks when
+their bounding boxes overlap by more than 0.6 IoU, retaining the higher
+detection-confidence track.
+
+The WhatsApp camera uses [lanes_config_whatsapp_one_lane.json](lanes_config_whatsapp_one_lane.json),
+which contains one tightened queue polygon plus TV and glass-booth exclusions.
+
+### [requirements.txt](requirements.txt)
+Lists the dependencies needed to run the project:
+
+- ultralytics
+- deep-sort-realtime
+- opencv-python
+- numpy
+
+These support object detection, tracking, video processing, and numerical computations.
+
+### Environment setup
+
+Use a dedicated Python environment for the people-queue pipeline. Python 3.10
+or newer is recommended:
 
 ```bash
-npm run dev
+python -m venv .venv
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-The application will be running at `http://localhost:8443` (or another port if 8443 is in use).
+This project performs inference with the pretrained `yolov8n.pt` weights; it
+does not train on the bundled CSV logs. The only detector class accepted by the
+pipeline is COCO class `0` (`person`). A source video and matching lane
+polygons are the required dataset inputs.
 
-### Building for Production
+### [yolov8n.pt](yolov8n.pt)
+This is the YOLOv8 nano pretrained model used for person detection. It identifies people as the COCO class with ID 0, which the code filters to only `person` detections.
 
-To create a production build:
+### [queue_log.csv](queue_log.csv)
+This is the output CSV log generated by the program. It records, per second and per lane, the following information:
+
+- timestamp
+- video_second
+- lane
+- queued_people_count
+- Q1 / Q2 / Q3 queue values
+- congestion level
+- predicted_next_second_m
+- trend
+- estimated_wait_seconds
+
+This is the numerical record of the simulation/processing.
+
+### [queue_log_retry.csv](queue_log_retry.csv)
+This file is a rerun of the queue estimation process, likely with different settings or different stability/tracking conditions. It represents a second attempt to evaluate the same queueing scenario under modified assumptions.
+
+### [queue_log_tuned.csv](queue_log_tuned.csv)
+This is a tuned version of the log, likely using adjusted parameters such as movement threshold, still-frame requirement, queue spacing, or exit window. It is useful for comparing the effect of hyperparameter tuning on queue estimates.
+
+### [output.mp4](output.mp4)
+Annotated video output of the queueing pipeline without tuning/retry modifications.
+
+### [output_retry.mp4](output_retry.mp4)
+Annotated rerun output using adjusted/alternative settings.
+
+### [output_tuned.mp4](output_tuned.mp4)
+Annotated output from the tuned configuration. This is often the best qualitative demonstration of the system because it shows tracked persons, their queue status, and the lane overlays.
+
+---
+
+## 3. High-level system architecture
+
+The system performs a sequence of operations on every video frame.
+
+### Step 1: Person detection
+Every frame passes through a YOLOv8 model configured to detect only people. The detector returns bounding boxes and confidence scores.
+
+For a detection box:
+
+$$
+\text{bbox} = [x_1, y_1, x_2, y_2]
+$$
+
+where $(x_1, y_1)$ and $(x_2, y_2)$ are the top-left and bottom-right corners of the person’s bounding box.
+
+The script keeps only detections whose class is the COCO person class:
+
+$$
+\text{class id } = 0 \quad \Rightarrow \quad \text{person}
+$$
+
+### Step 2: Tracking with Deep SORT
+Each detected person is assigned a track ID using Deep SORT so that the same person can be followed across multiple frames, even when partially occluded or moving.
+
+This matters because queue metrics are not computed from instantaneous positions alone; they depend on whether a person remains in the same region and stays still over several frames.
+
+### Step 3: Motion state and stationary classification
+For each track, the code stores a centroid history: the center of the person’s bounding box across recent frames.
+
+The centroid of a person at time $t$ is:
+
+$$
+C_t = \left(\frac{x_1 + x_2}{2}, \frac{y_1 + y_2}{2}\right)
+$$
+
+Then the displacement between consecutive centroids is computed as:
+
+$$
+D_t = \sqrt{(x_t - x_{t-1})^2 + (y_t - y_{t-1})^2}
+$$
+
+If this displacement is less than a movement threshold, the person is treated as not moving significantly. The project uses:
+
+- movement threshold = 8.0 pixels
+- still frames required = 6
+
+At each frame, the algorithm updates a stationary streak:
+
+- if $D_t \le 8$ px, increment streak
+- otherwise reset streak to zero
+
+A person is considered queued/stopped when:
+
+$$
+\text{stationary streak} \ge 6
+$$
+
+This rule captures the fact that people in a queue are not perfectly still in the geometric sense; they may sway slightly, shift weight, or jiggle. Because of this, the algorithm does not require zero motion, only a low-motion condition over several frames.
+
+### Step 4: Lane membership
+Each lane is defined as a polygon region in the image. The code checks whether each tracker centroid lies inside a lane polygon using OpenCV’s point-in-polygon test.
+
+This is a geometric inclusion check:
+
+$$
+\text{inside lane} = \text{cv2.pointPolygonTest}(\text{polygon}, p, \text{False}) \ge 0
+$$
+
+A person is associated with a lane if their centroid falls inside the queue polygon. That means the system can count only people who are physically in the queueing area, not people already past the stop line or elsewhere in the frame.
+
+### Step 5: Queue count and queue length in meters
+The script computes the number of people in a lane who are both:
+
+- tracked and classified as stopped
+- located inside that lane polygon
+
+Mathematically:
+
+$$
+N_{lane} = \#\{p \mid p\text{ is stopped and in lane}\}
+$$
+
+Then the estimated queue length is computed using a fixed spacing estimate:
+
+$$
+Q_{lane} = N_{lane} \cdot s
+$$
+
+where the project uses:
+
+$$
+ s = 0.55\ \text{m/person}
+$$
+
+This is not a calibrated physical measurement of the exact lane width or person spacing; it is a rough approximation consistent with the idea that people in a queue stand with near-uniform spacing. In a real system, this value would be calibrated with camera geometry, perspective correction, or manual measurement for improved accuracy.
+
+So the queue length in meters is essentially:
+
+$$
+Q_{lane} = 0.55 \times N_{lane}
+$$
+
+This is simple but effective for relative queue monitoring.
+
+---
+
+## 4. Congestion classification
+
+After estimating queue length for a lane, the system normalizes it against the lane’s configured maximum queue length, for example 4 m or 5 m depending on the lane.
+
+The ratio is:
+
+$$
+r = \frac{Q_{lane}}{L_{max}}
+$$
+
+where $L_{max}$ is the lane-specific maximum queue length in meters.
+
+The code then classifies queue severity as:
+
+- LOW if $r < 0.4$
+- MEDIUM if $0.4 \le r < 0.75$
+- HIGH otherwise
+
+This produces states such as LOW, MEDIUM, and HIGH based on the lane’s queue occupancy relative to its own expected maximum.
+
+This is a normalized severity measure, which is more useful than raw count because each lane may have a different allowed queue length or physical capacity.
+
+---
+
+## 5. Per-second aggregation: Q1, Q2, Q3
+
+The project builds a rolling buffer for each lane and flushes it every second, using the exact structure described in the simulation logic.
+
+For each lane and each one-second window, it accumulates recent queue-length values from every frame within that second. Suppose the queue-length values in one second are:
+
+$$
+\{q_1, q_2, ..., q_n\}
+$$
+
+Then the script computes three summary statistics:
+
+### Q1: first frame of the second
+
+$$
+Q1 = q_1
+$$
+
+This is the queue length at the start of the second and gives a sense of the initial condition.
+
+### Q2: average queue length during the second
+
+$$
+Q2 = \frac{1}{n}\sum_{i=1}^{n} q_i
+$$
+
+This represents the average congestion level over the second.
+
+### Q3: maximum queue length during the second
+
+$$
+Q3 = \max(q_1, q_2, ..., q_n)
+$$
+
+This is the conservative peak queue estimate for that second. The script uses this as the main value for trend forecasting because it is more robust against underestimation during brief spikes in queueing.
+
+The CSV columns `Q1_first_frame_m`, `Q2_avg_m`, and `Q3_max_m` are exactly these three values.
+
+---
+
+## 6. Trend forecasting: linear regression and queue direction prediction
+
+The code keeps a rolling history of lane queue values and fits a simple line to recent observations. The forecasting function is:
+
+$$
+\hat{y} = mx + b
+$$
+
+where:
+
+- $x$ is the time index
+- $y$ is the observed queue length
+- $m$ is the slope
+- $b$ is the intercept
+
+The script uses NumPy’s `polyfit` on the recent queue history. For a sequence of values:
+
+$$
+[y_0, y_1, y_2, ..., y_{n-1}]
+$$
+
+it builds:
+
+$$
+x = [0, 1, 2, ..., n-1]
+$$
+
+and solves for the least-squares best-fit line:
+
+$$
+(m, b) = \arg\min_{m,b} \sum_{i=0}^{n-1} (y_i - (mi + b))^2
+$$
+
+Then it predicts the next value:
+
+$$
+\hat{y}_{n} = mn + b
+$$
+
+The queue trend is then classified by the slope:
+
+- RISING if $m > 0.15$
+- FALLING if $m < -0.15$
+- STABLE otherwise
+
+This is a lightweight surrogate for a predictive model. It is intentionally simple, not a deep learning predictor. It captures the direction of recent queue growth or decay without needing a complex time-series model such as ARIMA, LSTM, or Kalman filtering.
+
+This is a useful operational approximation because real-time queue monitoring often needs only short-term trend awareness rather than a highly complex forecast.
+
+---
+
+## 7. Little’s Law for waiting-time estimation
+
+The project also estimates expected wait time using a variation of Little’s Law. The idea behind Little’s Law is:
+
+$$
+L = \lambda W
+$$
+
+where:
+
+- $L$ = average number of people in the system
+- $\lambda$ = average arrival or departure rate
+- $W$ = average waiting time
+
+Rearranging:
+
+$$
+W = \frac{L}{\lambda}
+$$
+
+In this project, queue count is the current number of people in the queue and the service rate is approximated from recent departures from that lane during a 30-second window.
+
+### Departure rate estimate
+
+Suppose the system records departure times from the lane in a deque:
+
+$$
+\{t_1, t_2, ..., t_k\}
+$$
+
+and only includes departures occurring inside the most recent trailing window of length $T = 30$ seconds:
+
+$$
+\lambda = \frac{k}{T}
+$$
+
+Then the waiting-time estimate becomes:
+
+$$
+W \approx \frac{N}{\lambda} = \frac{N \cdot T}{k}
+$$
+
+where $N$ is the current queued-person count.
+
+This is a rough operational estimate, not a formal queueing-theory solve. It gives a trend-level estimate of how long the current queue may take to clear if recent throughput continues unchanged.
+
+---
+
+## 8. Lane exit tracking and real-time queue dynamics
+
+A lane’s queue is not just count of current stopped people; it also tracks whether people leave one lane or another over time.
+
+The code records the last known lane for every tracked person and compares it to the current lane in the next frame. If a person is no longer in the same lane, the code records a departure event for the previous lane.
+
+This is used to estimate throughput by timing recent exits. The logic is essentially:
+
+- if a person used to be in lane A and now is not in lane A, they likely exited the queueing region
+- record the timestamp of that event
+- maintain a rolling list of departure timestamps for that lane
+
+This helps approximate how quickly the queue is draining.
+
+---
+
+## 9. Why the algorithm is called a simulation-like pipeline
+
+Although this project is not a discrete-event simulation in the classic sense, it behaves like a simulation of an operational queue in real time. The video is treated as a stream of frame observations, and the system continuously updates a virtual state for each person and lane.
+
+This simulation-like behavior includes:
+
+1. state updates per frame
+2. object motion over time
+3. lane occupancy transitions
+4. queue count drift as people enter/leave
+5. layer-by-layer accumulation of queue statistics
+6. timestamped CSV outputs representing queue state over time
+
+So the code is both:
+
+- a real-time computer vision pipeline
+- a queue-state simulation based on measured observations
+
+The “simulation” here is a state-space approximation of queue dynamics. It does not simulate random arrivals or service times from a theoretical model; it simulates the observed queue from actual detections and tracks.
+
+---
+
+## 10. Detailed execution flow
+
+The processing loop roughly follows this logic for each frame:
+
+1. Read a new frame from the video.
+2. Run YOLO on the frame to detect people.
+3. Pass detections to Deep SORT to assign or continue object IDs.
+4. For each tracked person:
+   - compute centroid
+   - compare to previous centroid
+   - decide whether the person is stationary enough to be considered queued
+5. For each lane:
+   - determine which stopped people are in that lane polygon
+   - count them
+   - estimate queue length via spacing approximation
+   - classify congestion level
+6. Update a per-second buffer storing the queue length values within that second.
+7. At the end of each second:
+   - compute Q1, Q2, Q3
+   - append the Q3 value to the historical trend series
+   - fit a linear slope
+   - classify the directional trend
+   - estimate wait time via departure-rate logic
+   - write row to CSV
+8. Optional: draw bounding boxes and lane overlays into a video output.
+
+This is effectively a time-series pipeline where the raw input is image data and the output is a sequence of queue summary metrics.
+
+---
+
+## 11. Why the lane geometry matters
+
+The lane polygons are intentionally drawn for the queueing region, not the full roadway. This is key to the physical semantics.
+
+The project’s comment in the lane config explains the intended behavior clearly:
+
+- the polygon covers the area from the stop line backward
+- people who cross the stop line are not counted as part of the queue
+- this matches intuitive queue logic: the queue is the waiting region, not the downstream movement region
+
+This is essential because otherwise a vehicle or person past the stop line would artificially inflate the queue count and distort waiting-time estimates.
+
+The stop line acts as a boundary condition:
+
+$$
+\text{Queue membership} = \text{inside polygon and before the stop line}
+$$
+
+not merely “near the camera” or “in the general lane region”.
+
+---
+
+## 12. Parameter interpretation and tuning
+
+The main tuning parameters are:
+
+### `STATIONARY_FRAMES_REQUIRED = 6`
+This means a person must remain effectively stationary for six consecutive frames before being classified as queued. This addresses jitter and noise while keeping the system responsive.
+
+### `MOVEMENT_THRESHOLD_PX = 8.0`
+This allows slight movements without resetting the stop state. It reflects the fact that people often shift weight, sway, or adjust posture in a queue.
+
+### `PEOPLE_QUEUE_SPACING_M = 0.55`
+This is the estimated linear spacing between queued people. It converts counts to queue length in meters. It is the most important simplification in the model because it approximates geometry without camera calibration.
+
+### `TREND_WINDOW_SECONDS = 20`
+This sets the number of recent per-second readings used to forecast queue direction. A larger window smooths noise; a shorter window reacts faster to sudden changes.
+
+### `EXIT_WINDOW_SECONDS = 30`
+This determines how much recent departure history is used in the Little’s Law wait-time estimate. A longer window provides a more stable throughput estimate; a shorter one is more responsive.
+
+### `TREND_EPSILON_M_PER_SEC = 0.15`
+This threshold decides whether a slope is considered rising, falling, or stable.
+
+---
+
+## 13. Mathematical summary of the complete pipeline
+
+The entire method can be expressed as a compact sequence.
+
+### Person detection
+
+For each frame $F_t$:
+
+$$
+\text{Detections}_t = \text{YOLO}(F_t)
+$$
+
+### Tracking
+
+Each detection is assigned a track ID:
+
+$$
+\text{Track}_t = \text{DeepSORT}(\text{Detections}_t)
+$$
+
+### Motion state
+
+For each tracked person $p$:
+
+$$
+D_t(p) = \sqrt{(x_t^p - x_{t-1}^p)^2 + (y_t^p - y_{t-1}^p)^2}
+$$
+
+and:
+
+$$
+\text{stopped}(p) = [D_t(p) \le 8\text{ px}] \text{ for } 6 \text{ consecutive frames}
+$$
+
+### Lane queue length
+
+For lane $L$:
+
+$$
+N_L = \sum_{p \in L} I(\text{stopped}(p) \land p \in L)
+$$
+
+and:
+
+$$
+Q_L = N_L \cdot 0.55
+$$
+
+### Congestion level
+
+$$
+r_L = \frac{Q_L}{L_{max}}
+$$
+
+with classification thresholds:
+
+$$
+\begin{cases}
+\text{LOW}, & r_L < 0.4 \\
+\text{MEDIUM}, & 0.4 \le r_L < 0.75 \\
+\text{HIGH}, & r_L \ge 0.75
+\end{cases}
+$$
+
+### Per-second summary
+
+For one second of queue observations $\{q_1, ..., q_n\}$:
+
+$$
+Q1 = q_1
+$$
+
+$$
+Q2 = \frac{1}{n}\sum_{i=1}^{n} q_i
+$$
+
+$$
+Q3 = \max_i q_i
+$$
+
+### Trend forecast
+
+Fit a linear model:
+
+$$
+\hat{y} = mx + b
+$$
+
+using least squares on recent queue values. Then forecast:
+
+$$
+\hat{y}_{next} = m(n+1) + b
+$$
+
+### Wait-time estimate
+
+Using departure counts in the last $T$ seconds:
+
+$$
+\lambda = \frac{k}{T}
+$$
+
+and:
+
+$$
+W \approx \frac{N}{\lambda}
+$$
+
+which gives a practical estimated waiting time in seconds.
+
+---
+
+## 14. Strengths of the approach
+
+- Fast and simple to implement
+- Works in real time on video streams
+- Suitable for queue monitoring and operational dashboards
+- Uses lane-specific geometry to constrain counting
+- Produces both queue length and forecast trend
+- Produces a numerical log that is easy to analyze downstream
+
+## 15. Weaknesses and limitations
+
+- Queue spacing is assumed constant and may be inaccurate under perspective distortion
+- People can be partially occluded and may be miscounted or merged by tracking
+- The motion threshold is heuristic and scene-dependent
+- The trend forecast is a simple linear fit, not a robust time-series model
+- Little’s Law estimate is approximate and should be treated as operational guidance, not exact prediction
+- The system depends on the selected people-queue polygons being drawn correctly
+
+For a production deployment, one would often improve this with:
+
+- camera calibration and perspective normalization
+- stronger person re-identification
+- Bayesian filtering or queue-theory models
+- better forecasting models such as ARIMA, state-space models, or machine learning time-series predictions
+
+---
+
+## 16. How to run the project
+
+A typical command is:
 
 ```bash
-npm run build
+python queue_congestion_prediction.py --video path/to/video.mp4 --lanes lanes_config.json --model yolov8n.pt --output queue_log.csv --save-video output.mp4
 ```
 
-To preview the production build locally:
+Optional arguments include:
 
-```bash
-npm run preview
+- `--conf` for detection confidence threshold
+- `--still-frames` for stationary-window sensitivity
+- `--move-threshold` for motion tolerance
+- `--spacing` for queue spacing in meters per person
+- `--exit-window` for Little’s Law estimation window
+
+This command processes the video, writes the queue metrics to CSV, and optionally saves an annotated video with bounding boxes and lane overlays.
+
+---
+
+## 17. Interpretation of the output log
+
+The generated CSV includes a row per lane per second. A row such as:
+
+```csv
+2026-09-05T20:07:20,2,Lane 1,4,1.65,1.16,2.2,LOW,2.75,RISING,60.0
 ```
 
-## Project Structure
+means:
 
-- `src/main.tsx`: React entry point.
-- `src/App.tsx`: Primary application component containing role-based routing and main dashboard layout.
-- `src/index.css`: Global CSS and Tailwind CSS v4 configuration.
+- at second 2 of the recording
+- Lane 1 had 4 queued people
+- Q1 = 1.65 m
+- Q2 = 1.16 m
+- Q3 = 2.2 m
+- congestion level = LOW
+- predicted next-second queue length = 2.75 m
+- trend = RISING
+- estimated wait = 60 seconds
 
-## License
+This is the practical output of the queue monitoring system.
 
-This project is proprietary and confidential.
+---
+
+## 18. Final summary
+
+This project is a real-time queue monitoring and congestion forecasting pipeline based on video analysis. It combines:
+
+- person detection via YOLO
+- tracking via Deep SORT
+- geometric lane segmentation
+- stationary-person classification
+- queue-length estimation using average spacing assumptions
+- per-second aggregation of queue statistics
+- linear trend prediction to estimate whether the queue is rising or falling
+- Little’s Law to provide a rough wait-time estimate
+
+The heart of the method is the conversion of image-level observations into a queue-state time series, and then applying simple but meaningful mathematical summaries to that time series. The result is a practical system for observing crowded waiting lines without building a full physical simulation of pedestrian traffic.
+
+In other words, the system does not “invent” queue behavior from pure theory; it measures behavior from the video, discretizes it in time, and then applies compact mathematical models to estimate queue severity, trend, and waiting time.
+
+---
+
+This README reflects the actual implementation in the workspace and the queue-estimation logic used in the script. It is intended to be a detailed explanation of both the software structure and the mathematical reasoning behind it.
